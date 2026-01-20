@@ -1,9 +1,4 @@
-# app.py — SmartPark v2.3 (single-map Folium + scaled bubbles + click-to-add)
-# NOTE:
-# - Uses ONE map (Folium via streamlit-folium)
-# - Bubble size scales by TOTAL reports for that location + selected spot_type
-# - Click anywhere on the map to capture lat/lon, then add a location
-# - Keeps the rest of your app (Live Board / Check / Submit / Manage / Analytics) working
+# app.py — SmartPark v2.3 (single-map Folium + scaled bubbles + click-to-add + fullscreen)
 
 import os
 import time
@@ -67,9 +62,37 @@ st.markdown(
 PARKING_DATA_FILE = "parking_data.csv"
 EXPECTED_COLS = ["timestamp", "location", "day_of_week", "hour", "found_parking", "spot_type"]
 
-# East Rockaway, NY (default center)
 DEFAULT_CENTER_LAT = 40.6423
 DEFAULT_CENTER_LON = -73.6696
+
+
+# ============================================================
+# FULLSCREEN CSS HELPER (MUST BE DEFINED BEFORE USE)
+# ============================================================
+def apply_fullscreen_css(enabled: bool):
+    if not enabled:
+        st.markdown(
+            """
+            <style>
+            .main > div { padding-top: 2rem; }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
+
+    st.markdown(
+        """
+        <style>
+        /* "fullscreen-like" map mode */
+        .main > div { padding-top: 0.2rem !important; }
+        header, footer { visibility: hidden; height: 0px; }
+        [data-testid="stSidebar"] { display: none !important; width: 0 !important; }
+        section.main { padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # ============================================================
@@ -104,7 +127,6 @@ def compute_time_ago_label(last_updated_value) -> str:
 
 
 def _get_status_and_icon(prob: float) -> tuple[str, str]:
-    """Local safe copy of status thresholds (so we don't rely on importing private helpers)."""
     try:
         p = float(prob)
     except Exception:
@@ -117,35 +139,23 @@ def _get_status_and_icon(prob: float) -> tuple[str, str]:
 
 
 def scale_radius(total_reports: int) -> int:
-    """
-    Convert total report count -> bubble radius for the map (for our internal scale).
-    Targets (approx):
-      0 -> ~80
-      5 -> ~136
-      20 -> ~192
-      50 -> ~257
-    Clamped to [70, 300].
-    """
     try:
         n = int(total_reports)
     except Exception:
         n = 0
     if n < 0:
         n = 0
-
     r = 80 + 25 * math.sqrt(n)
     r = max(70, min(300, r))
     return int(r)
 
 
 def safe_read_parking_data(path: str = PARKING_DATA_FILE) -> pd.DataFrame:
-    """Read parking data safely. Always returns a DF with EXPECTED_COLS."""
     if not os.path.exists(path):
         return pd.DataFrame(columns=EXPECTED_COLS)
 
     try:
         df = pd.read_csv(path)
-
         for c in EXPECTED_COLS:
             if c not in df.columns:
                 df[c] = None
@@ -171,10 +181,6 @@ def append_parking_report(new_report: dict, path: str = PARKING_DATA_FILE) -> No
 
 
 def safe_locations_with_coords(location_manager: LocationManager) -> pd.DataFrame:
-    """
-    Works whether or not your utils.py has get_locations_with_coords_df().
-    Returns active locations with lat/lon if present.
-    """
     if hasattr(location_manager, "get_locations_with_coords_df"):
         try:
             df = location_manager.get_locations_with_coords_df()
@@ -208,12 +214,6 @@ def safe_locations_with_coords(location_manager: LocationManager) -> pd.DataFram
 
 
 def add_bubble_markers(m: folium.Map, df: pd.DataFrame):
-    """
-    Adds colored circle markers to a folium map from map_df.
-    Expects columns:
-      lat, lon, color (RGBA list), radius (int),
-      location, availability_pct, status_text, total_reports, recent_reports, last_report_text, icon.
-    """
     if df is None or len(df) == 0:
         return
 
@@ -257,7 +257,6 @@ def add_bubble_markers(m: folium.Map, df: pd.DataFrame):
         except Exception:
             raw_r = 120
 
-        # Folium CircleMarker radius is "pixel-ish". Convert & clamp for a nice look.
         folium_radius = max(6, min(30, raw_r / 9.0))
 
         folium.CircleMarker(
@@ -274,10 +273,6 @@ def add_bubble_markers(m: folium.Map, df: pd.DataFrame):
 
 
 def safe_compute_live_status(location: str, parking_df: pd.DataFrame, predictor, recency_minutes: int, spot_type: str):
-    """
-    compute_live_status() might accept spot_type in your version… or it might not.
-    This wrapper makes it safe either way.
-    """
     try:
         return compute_live_status(
             location=location,
@@ -287,7 +282,6 @@ def safe_compute_live_status(location: str, parking_df: pd.DataFrame, predictor,
             spot_type=spot_type,
         )
     except TypeError:
-        # Fallback: older signature; our df is already spot-filtered.
         return compute_live_status(
             location=location,
             parking_df=parking_df,
@@ -383,7 +377,7 @@ tab_map, tab_live, tab_check, tab_submit, tab_manage, tab_analytics = st.tabs(
 )
 
 # ============================================================
-# TAB: MAP (SINGLE MAP: Folium bubbles + click-to-add)
+# TAB: MAP (SINGLE MAP: Folium bubbles + click-to-add + fullscreen)
 # ============================================================
 with tab_map:
     st.header("🗺️ Interactive Parking Map")
@@ -396,19 +390,22 @@ with tab_map:
         horizontal=True,
         key="map_spot_type",
     )
-    # Fullscreen toggle
+
+    # Fullscreen toggle (fix indentation + define before use)
     if "map_fullscreen" not in st.session_state:
         st.session_state["map_fullscreen"] = False
 
-        fs_col1, fs_col2 = st.columns([1, 3])
+    fs_col1, fs_col2 = st.columns([1, 3])
     with fs_col1:
-        st.session_state["map_fullscreen"] = st.toggle("🖥️ Full screen map", value=st.session_state["map_fullscreen"])
+        st.session_state["map_fullscreen"] = st.toggle(
+            "🖥️ Full screen map",
+            value=st.session_state["map_fullscreen"],
+        )
     with fs_col2:
         st.caption("Fullscreen hides the sidebar and expands the map height.")
 
-        apply_fullscreen_css(st.session_state["map_fullscreen"])
-
-map_height = 900 if st.session_state["map_fullscreen"] else 520
+    apply_fullscreen_css(st.session_state["map_fullscreen"])
+    map_height = 900 if st.session_state["map_fullscreen"] else 520
 
     # Auto-refresh timer
     if "map_last_refresh" not in st.session_state:
@@ -417,15 +414,13 @@ map_height = 900 if st.session_state["map_fullscreen"] else 520
     next_map_refresh = max(0, AUTO_REFRESH_SECONDS - int(seconds_since_map_refresh))
     st.caption(f"🔄 Next refresh in {next_map_refresh}s")
 
-    # Load locations w/ coords
+    # Load locations & data
     loc_df = safe_locations_with_coords(location_manager)
 
-    # Load parking data once
     parking_df = safe_read_parking_data(PARKING_DATA_FILE)
     parking_df["location_norm"] = parking_df["location"].fillna("").astype(str).str.strip().str.lower()
     parking_df["spot_type_norm"] = parking_df["spot_type"].fillna("general").astype(str).str.strip().str.lower()
 
-    # Filter by selected spot type (used for live + totals)
     parking_df_spot = parking_df[parking_df["spot_type_norm"] == map_spot_type].copy()
 
     map_rows = []
@@ -446,7 +441,6 @@ map_height = 900 if st.session_state["map_fullscreen"] else 520
 
             name_norm = str(r.get("location_norm", "")).strip().lower()
 
-            # live status (recent reports or fallback)
             live = safe_compute_live_status(
                 location=name,
                 parking_df=parking_df_spot,
@@ -455,7 +449,6 @@ map_height = 900 if st.session_state["map_fullscreen"] else 520
                 spot_type=map_spot_type,
             )
 
-            # total reports for bubble size (TOTAL across entire dataset for that spot_type)
             try:
                 total_reports = int((parking_df_spot["location_norm"] == name_norm).sum())
             except Exception:
@@ -463,21 +456,18 @@ map_height = 900 if st.session_state["map_fullscreen"] else 520
 
             radius = scale_radius(total_reports)
 
-            # availability
             try:
                 availability = float(live.get("availability", 0.5))
             except Exception:
                 availability = 0.5
 
-            # color by availability
             if availability >= 0.65:
-                color = [40, 167, 69, 200]   # green
+                color = [40, 167, 69, 200]
             elif availability >= 0.35:
-                color = [255, 193, 7, 200]   # yellow
+                color = [255, 193, 7, 200]
             else:
-                color = [220, 53, 69, 200]   # red
+                color = [220, 53, 69, 200]
 
-            # ensure icon/text exist
             status_text = str(live.get("status_text", "Unknown"))
             icon = str(live.get("icon", "⚪"))
             if status_text == "Unknown" and icon == "⚪":
@@ -502,20 +492,15 @@ map_height = 900 if st.session_state["map_fullscreen"] else 520
 
     map_df = pd.DataFrame(map_rows)
 
-    # Choose map center
     if map_df is not None and len(map_df) > 0 and map_df["lat"].notna().any() and map_df["lon"].notna().any():
         center_lat = float(map_df["lat"].mean())
         center_lon = float(map_df["lon"].mean())
     else:
         center_lat, center_lon = DEFAULT_CENTER_LAT, DEFAULT_CENTER_LON
 
-    # Build ONE folium map
     m = make_folium_map(center_lat, center_lon, zoom=14)
-
-    # Add bubbles for locations
     add_bubble_markers(m, map_df)
 
-    # Show a visible pin for the last clicked point (if any)
     if "map_click_lat" in st.session_state and "map_click_lon" in st.session_state:
         try:
             folium.Marker(
@@ -526,10 +511,9 @@ map_height = 900 if st.session_state["map_fullscreen"] else 520
         except Exception:
             pass
 
-    # Render and capture clicks
     click_data = st_folium(
         m,
-        height=520,
+        height=map_height,  # ✅ uses fullscreen height
         width=None,
         returned_objects=["last_clicked"],
         key="smartpark_single_map",
@@ -540,7 +524,6 @@ map_height = 900 if st.session_state["map_fullscreen"] else 520
         st.session_state["map_click_lon"] = float(click_data["last_clicked"]["lng"])
         st.success(f"Captured click: ({st.session_state['map_click_lat']:.6f}, {st.session_state['map_click_lon']:.6f})")
 
-    # Legend
     st.markdown("---")
     l1, l2, l3 = st.columns(3)
     with l1:
@@ -550,7 +533,6 @@ map_height = 900 if st.session_state["map_fullscreen"] else 520
     with l3:
         st.markdown("🔴 **Low Availability** (<35%)")
 
-    # Add-location panel
     st.markdown("---")
     st.subheader("➕ Add a new location from the click")
 
@@ -603,7 +585,6 @@ map_height = 900 if st.session_state["map_fullscreen"] else 520
             if not name_clean:
                 name_clean = f"Map Pin ({lat_val:.5f}, {lon_val:.5f})"
 
-            # Duplicate protection (case-insensitive)
             exists = False
             try:
                 all_df = location_manager.get_all_locations_df()
@@ -627,7 +608,6 @@ map_height = 900 if st.session_state["map_fullscreen"] else 520
                         lon=lon_val,
                     )
                 except TypeError:
-                    # if your LocationManager doesn't support lat/lon yet
                     ok = location_manager.add_location(
                         location=name_clean,
                         notes=(new_notes or "").strip(),
@@ -648,7 +628,6 @@ map_height = 900 if st.session_state["map_fullscreen"] else 520
                 else:
                     st.error("❌ Could not add location (it may already exist or there was a write error).")
 
-    # Refresh loop
     if seconds_since_map_refresh >= AUTO_REFRESH_SECONDS:
         st.session_state.map_last_refresh = datetime.now()
         time.sleep(0.08)
@@ -694,7 +673,6 @@ with tab_live:
                 spot_type=live_spot_type,
             )
 
-            # If fallback happened and didn't apply spot_type somewhere, override safely
             if not live.get("is_live", False):
                 try:
                     live["availability"] = predictor.predict(loc, now.strftime("%A"), now.hour, spot_type=live_spot_type)
@@ -915,7 +893,6 @@ with tab_submit:
                 spot_type=report_spot_type,
             )
 
-            # If your LocationManager has trust features, try incrementing verified
             if hasattr(location_manager, "increment_verified"):
                 try:
                     location_manager.increment_verified(report_location)
@@ -996,101 +973,6 @@ with tab_manage:
             else:
                 st.warning("⚠️ Location already exists or could not be added.")
 
-    st.markdown("---")
-    st.subheader("📋 Current Locations")
-
-    try:
-        locations_df = location_manager.get_all_locations_df()
-    except Exception:
-        locations_df = pd.DataFrame()
-
-    if locations_df is None or len(locations_df) == 0:
-        st.info("No locations yet.")
-    else:
-        if "lat" not in locations_df.columns:
-            locations_df["lat"] = None
-        if "lon" not in locations_df.columns:
-            locations_df["lon"] = None
-        if "is_active" in locations_df.columns:
-            locations_df["is_active"] = locations_df["is_active"].astype(str).str.lower().isin(["true", "1", "yes"])
-        else:
-            locations_df["is_active"] = True
-
-        active_count = int(locations_df["is_active"].sum())
-        coords_count = int(
-            (pd.to_numeric(locations_df["lat"], errors="coerce").notna() & pd.to_numeric(locations_df["lon"], errors="coerce").notna()).sum()
-        )
-        st.caption(f"{len(locations_df)} location(s) • {active_count} active • {coords_count} with coordinates")
-
-        for idx, row in locations_df.iterrows():
-            loc_name = str(row.get("location", "")).strip()
-            if not loc_name:
-                continue
-
-            notes = row.get("notes", "")
-            notes = "" if pd.isna(notes) else str(notes).strip()
-
-            has_coords = pd.notna(pd.to_numeric(row.get("lat", None), errors="coerce")) and pd.notna(
-                pd.to_numeric(row.get("lon", None), errors="coerce")
-            )
-            has_coords_marker = "🗺️ " if has_coords else ""
-            label = f"{has_coords_marker}{'✅' if bool(row.get('is_active', True)) else '❌'} {loc_name}"
-            if notes:
-                label += f" - {notes}"
-
-            with st.expander(label, expanded=False):
-                c1, c2, c3, c4 = st.columns(4)
-                with c1:
-                    st.markdown(f"**Created:** {row.get('created_at','')}")
-                with c2:
-                    st.markdown(f"**Created by:** {row.get('created_by','')}")
-                with c3:
-                    st.markdown(f"**Status:** {'🟢 Active' if bool(row.get('is_active', True)) else '🔴 Inactive'}")
-                with c4:
-                    trust = row.get("trust_score", None)
-                    try:
-                        trust = float(trust)
-                        badge = "🟢" if trust >= 70 else ("🟡" if trust >= 40 else "🔴")
-                        st.markdown(f"**Trust:** {badge} {trust:.0f}")
-                    except Exception:
-                        st.markdown("**Trust:** —")
-
-                if has_coords:
-                    try:
-                        st.markdown(f"**📍 Coordinates:** {float(row['lat']):.6f}, {float(row['lon']):.6f}")
-                    except Exception:
-                        st.caption("Coordinates present but unreadable.")
-                else:
-                    st.caption("No coordinates set for this location (won't appear on map).")
-
-                if bool(row.get("is_active", True)):
-                    b1, b2 = st.columns(2)
-                    with b1:
-                        if st.button("🚫 Deactivate", key=f"deactivate_{idx}"):
-                            try:
-                                location_manager.deactivate_location(loc_name)
-                            except Exception:
-                                pass
-                            event_logger.log("location_deactivate", location=loc_name, user=user_nickname, details="Deactivated")
-                            st.cache_resource.clear()
-                            st.success("Deactivated.")
-                            time.sleep(0.2)
-                            st.rerun()
-                    with b2:
-                        if st.button("🚩 Flag", key=f"flag_{idx}"):
-                            if hasattr(location_manager, "increment_flagged"):
-                                try:
-                                    location_manager.increment_flagged(loc_name)
-                                except Exception:
-                                    pass
-                            event_logger.log("location_flag", location=loc_name, user=user_nickname, details="Flagged")
-                            st.cache_resource.clear()
-                            st.warning("Flagged.")
-                            time.sleep(0.2)
-                            st.rerun()
-                else:
-                    st.info("This location is inactive.")
-
 # ============================================================
 # TAB: ANALYTICS
 # ============================================================
@@ -1133,8 +1015,8 @@ with tab_analytics:
                 st.metric("Data Range", "N/A")
 
         st.markdown("---")
-
         st.subheader("📍 Success Rate by Location")
+
         try:
             loc_stats = (
                 df_view.groupby("location")
@@ -1147,46 +1029,6 @@ with tab_analytics:
             st.dataframe(loc_stats[["Location", "Success Rate", "Reports"]], use_container_width=True, hide_index=True)
         except Exception as e:
             st.warning(f"Could not compute location stats: {e}")
-
-        st.markdown("---")
-        st.subheader("🕒 Recent Reports")
-        try:
-            recent_df = df_view.sort_values("timestamp", ascending=False).head(12)
-            recent_display = recent_df[["timestamp", "location", "spot_type", "day_of_week", "hour", "found_parking"]].copy()
-            recent_display["found_parking"] = pd.to_numeric(recent_display["found_parking"], errors="coerce").fillna(0).astype(int)
-            recent_display["found_parking"] = recent_display["found_parking"].apply(lambda x: "✅ Yes" if x == 1 else "❌ No")
-            recent_display["spot_type"] = recent_display["spot_type"].apply(lambda x: spot_label(str(x)))
-            recent_display.columns = ["Timestamp", "Location", "Spot Type", "Day", "Hour", "Found Parking"]
-            st.dataframe(recent_display, use_container_width=True, hide_index=True)
-        except Exception as e:
-            st.warning(f"Could not show recent reports: {e}")
-def apply_fullscreen_css(enabled: bool):
-    if not enabled:
-        st.markdown(
-            """
-            <style>
-            /* normal mode */
-            .main > div { padding-top: 2rem; }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-        return
-
-    st.markdown(
-        """
-        <style>
-        /* "fullscreen-like" map mode */
-        .main > div { padding-top: 0.2rem !important; }
-        header, footer { visibility: hidden; height: 0px; }
-        /* Hide the sidebar */
-        [data-testid="stSidebar"] { display: none !important; width: 0 !important; }
-        /* Give main area more space */
-        section.main { padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
 
 # ============================================================
 # FOOTER
