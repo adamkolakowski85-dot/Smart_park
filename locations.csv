@@ -1,0 +1,3 @@
+location,notes,is_active,created_at,created_by,verified_count,flagged_count,trust_score,lat,lon
+Rhame Avenue,,True,2026-01-19T12:26:41,Adam,0,0,50.0,40.6384044350228,-73.66477831670429
+Starbucks,Beach Road,True,2026-01-19T19:10:36,Anonymous,0,0,50.0,40.64483557112286,-73.70361125055507
